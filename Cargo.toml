@@ -1,0 +1,25 @@
+[package]
+name = "jwt-guard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arc-swap = "1"
+http = "1.4.0"
+http-body-util = "0.1.3"
+hyper = { version = "1.8.1", features = ["full"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "aws-lc-rs", "webpki-tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
+hyper-util = { version = "0.1.20", features = ["client-legacy", "full"] }
+jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
+reqwest = { version = "0.13.2", features = ["json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.50", features = ["full"] }
+
+[dev-dependencies]
+rsa = { version = "0.9", features = ["pem"] }
+sha2 = { version = "0.10", features = ["oid"] }
+base64 = "0.22"
+rand = "0.8"
+wiremock = "0.6"
