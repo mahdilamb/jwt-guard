@@ -1,0 +1,46 @@
+services:
+  upstream:
+    build: ./upstream
+    restart: on-failure
+    environment:
+      - PORT=8000
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  jwt-guard:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+
+      PORT: 3000
+
+      JWT_GUARD_TARGET_URL: http://upstream:8000
+
+      JWT_GUARD_AUTH_SCHEMES: GOOGLE
+      JWT_GUARD_GOOGLE_ISSUER: https://accounts.google.com
+      JWT_GUARD_GOOGLE_JWKS_URI: https://www.googleapis.com/oauth2/v3/certs
+
+      JWT_GUARD_LOGGING_FORMAT: google_cloud
+      GOOGLE_CLOUD_PROJECT: TEST_PROJECT
+    depends_on:
+      upstream:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: rebuild
+          path: ./src
+        - action: rebuild
+          path: ./Cargo.toml
