@@ -79,6 +79,35 @@ async fn spawn_upstream() -> SocketAddr {
     addr
 }
 
+/// Spin up an upstream that echoes all request headers as JSON in the response body.
+async fn spawn_header_echo_upstream() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let svc = service_fn(|req: Request<Incoming>| async move {
+                    let mut headers = serde_json::Map::new();
+                    for (key, value) in req.headers() {
+                        headers.insert(
+                            key.to_string(),
+                            serde_json::Value::String(value.to_str().unwrap_or("").to_string()),
+                        );
+                    }
+                    let body_str = serde_json::to_string(&headers).unwrap();
+                    let body = http_body_util::Full::new(hyper::body::Bytes::from(body_str));
+                    Ok::<_, std::convert::Infallible>(hyper::Response::new(body))
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), svc)
+                    .await;
+            });
+        }
+    });
+    addr
+}
+
 struct TestHarness {
     proxy_addr: SocketAddr,
     private_der: Vec<u8>,
@@ -130,9 +159,9 @@ async fn setup(audience: Option<&str>) -> TestHarness {
         target_url: target,
         schemes,
         jwks_cache: cache,
-        forward_payload: true,
+        forward_payload: Some("x-jwt-payload".to_string()),
         forward_authorization: false,
-        forward_scheme: true,
+        forward_scheme: Some("x-jwt-scheme".to_string()),
         upstream_timeout: std::time::Duration::from_secs(30),
         logging: jwt_guard::logging::LoggingFormat::None,
     });
@@ -740,4 +769,129 @@ async fn error_response_is_plain_text_when_accept_text() {
         .to_str()
         .unwrap();
     assert!(ct.contains("text/plain"));
+}
+
+// ── Custom forward headers ─────────────────────────────────────────────────
+
+async fn setup_with_headers(
+    payload_header: Option<&str>,
+    scheme_header: Option<&str>,
+) -> TestHarness {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let kid = "test-key-1";
+    let issuer = "https://test-issuer.example.com";
+
+    let (private_der, jwk) = generate_rsa_keypair(kid);
+    let jwks = json!({ "keys": [jwk] });
+
+    let jwks_server = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_json(&jwks))
+        .mount(&jwks_server)
+        .await;
+
+    let upstream_addr = spawn_header_echo_upstream().await;
+
+    let schemes = vec![(
+        "test".to_string(),
+        jwt_guard::config::AuthScheme {
+            issuer: issuer.to_string(),
+            jwks_uri: jwks_server.uri(),
+            audiences: None,
+        },
+    )];
+
+    let cache = jwt_guard::jwks::init_cache(&schemes).await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    let target = format!("http://{upstream_addr}");
+    let schemes = Arc::new(schemes);
+    let client = jwt_guard::proxy::build_client();
+
+    let state = Arc::new(jwt_guard::proxy::AppState {
+        client,
+        target_url: target,
+        schemes,
+        jwks_cache: cache,
+        forward_payload: payload_header.map(String::from),
+        forward_authorization: false,
+        forward_scheme: scheme_header.map(String::from),
+        upstream_timeout: std::time::Duration::from_secs(30),
+        logging: jwt_guard::logging::LoggingFormat::None,
+    });
+
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let svc = service_fn(move |req: Request<Incoming>| {
+                    let state = Arc::clone(&state);
+                    async move { jwt_guard::proxy::handle(&state, req).await }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), svc)
+                    .await;
+            });
+        }
+    });
+
+    TestHarness {
+        proxy_addr,
+        private_der,
+        kid: kid.to_string(),
+        issuer: issuer.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn custom_payload_header_name() {
+    let h = setup_with_headers(Some("x-custom-payload"), Some("x-jwt-scheme")).await;
+    let token = make_jwt(&h.private_der, &h.kid, &valid_claims(&h.issuer));
+    let (status, body) = get(h.proxy_addr, &token).await;
+    assert_eq!(status, 200);
+    let headers: Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        headers.get("x-custom-payload").is_some(),
+        "custom payload header should be present: {headers}"
+    );
+    assert!(
+        headers.get("x-jwt-payload").is_none(),
+        "default payload header should NOT be present: {headers}"
+    );
+}
+
+#[tokio::test]
+async fn custom_scheme_header_name() {
+    let h = setup_with_headers(Some("x-jwt-payload"), Some("x-custom-scheme")).await;
+    let token = make_jwt(&h.private_der, &h.kid, &valid_claims(&h.issuer));
+    let (status, body) = get(h.proxy_addr, &token).await;
+    assert_eq!(status, 200);
+    let headers: Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        headers.get("x-custom-scheme").is_some(),
+        "custom scheme header should be present: {headers}"
+    );
+    assert!(
+        headers.get("x-jwt-scheme").is_none(),
+        "default scheme header should NOT be present: {headers}"
+    );
+}
+
+#[tokio::test]
+async fn disabled_forward_headers() {
+    let h = setup_with_headers(None, None).await;
+    let token = make_jwt(&h.private_der, &h.kid, &valid_claims(&h.issuer));
+    let (status, body) = get(h.proxy_addr, &token).await;
+    assert_eq!(status, 200);
+    let headers: Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        headers.get("x-jwt-payload").is_none(),
+        "payload header should not be forwarded: {headers}"
+    );
+    assert!(
+        headers.get("x-jwt-scheme").is_none(),
+        "scheme header should not be forwarded: {headers}"
+    );
 }

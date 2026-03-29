@@ -161,16 +161,40 @@ pub fn target_url() -> Result<String, ConfigError> {
     env_required("TARGET_URL")
 }
 
-pub fn forward_payload() -> bool {
-    env_var("FORWARD_PAYLOAD")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(true)
+/// Parse a forwarding variable that can be a boolean or a custom header name starting with `x-`.
+fn parse_forward(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    match lower.as_str() {
+        "0" | "false" => None,
+        "1" | "true" => Some(String::new()), // empty = use default header
+        _ if lower.starts_with("x-") => Some(lower),
+        _ => None,
+    }
 }
 
-pub fn forward_scheme() -> bool {
+pub fn forward_payload() -> Option<String> {
+    env_var("FORWARD_PAYLOAD")
+        .and_then(|v| parse_forward(&v))
+        .or(Some(String::new())) // default: enabled with default header
+        .map(|s| {
+            if s.is_empty() {
+                "x-jwt-payload".to_string()
+            } else {
+                s
+            }
+        })
+}
+
+pub fn forward_scheme() -> Option<String> {
     env_var("FORWARD_SCHEME")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+        .and_then(|v| parse_forward(&v))
+        .map(|s| {
+            if s.is_empty() {
+                "x-jwt-scheme".to_string()
+            } else {
+                s
+            }
+        })
 }
 
 pub fn forward_authorization() -> bool {
@@ -313,5 +337,31 @@ mod tests {
             remove_env("JWT_GUARD_TEST_JWKS_URI");
             remove_env("JWT_GUARD_TEST_AUDIENCES");
         }
+    }
+
+    #[test]
+    fn parse_forward_booleans() {
+        assert_eq!(parse_forward("true"), Some(String::new()));
+        assert_eq!(parse_forward("1"), Some(String::new()));
+        assert_eq!(parse_forward("false"), None);
+        assert_eq!(parse_forward("0"), None);
+    }
+
+    #[test]
+    fn parse_forward_custom_header() {
+        assert_eq!(
+            parse_forward("x-custom-payload"),
+            Some("x-custom-payload".to_string())
+        );
+        assert_eq!(
+            parse_forward("X-My-Header"),
+            Some("x-my-header".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_forward_invalid_falls_back_to_none() {
+        assert_eq!(parse_forward("yes"), None);
+        assert_eq!(parse_forward("payload"), None);
     }
 }
