@@ -24,6 +24,7 @@ struct OpenIdConfig {
 }
 
 /// Raw parsed env vars before OpenID discovery.
+#[derive(Debug)]
 struct RawScheme {
     issuer: Option<String>,
     jwks_uri: Option<String>,
@@ -52,11 +53,19 @@ fn parse_env_schemes() -> Result<Vec<(String, RawScheme)>, ConfigError> {
         let issuer = env_var(&format!("{name}_ISSUER"));
         let jwks_uri = env_var(&format!("{name}_JWKS_URI"));
 
+        let single_aud = env_var(&format!("{name}_AUDIENCE"));
+        let multi_aud = env_var(&format!("{name}_AUDIENCES"));
+        if single_aud.is_some() && multi_aud.is_some() {
+            return Err(ConfigError::InvalidEnvVar {
+                key: format!("{ENV_PREFIX}{name}_AUDIENCE / {ENV_PREFIX}{name}_AUDIENCES"),
+                reason: "set one or the other, not both".to_string(),
+            });
+        }
         let mut audiences = Vec::new();
-        if let Some(aud) = env_var(&format!("{name}_AUDIENCE")) {
+        if let Some(aud) = single_aud {
             audiences.push(aud);
         }
-        if let Some(auds) = env_var(&format!("{name}_AUDIENCES")) {
+        if let Some(auds) = multi_aud {
             audiences.extend(auds.split(',').map(|s| s.trim().to_string()));
         }
 
@@ -215,4 +224,94 @@ pub fn upstream_timeout() -> Result<Duration, ConfigError> {
         None => 30,
     };
     Ok(Duration::from_secs(secs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Env var tests must run serially to avoid cross-contamination.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    unsafe fn set_env(key: &str, val: &str) {
+        unsafe { std::env::set_var(key, val) };
+    }
+
+    unsafe fn remove_env(key: &str) {
+        unsafe { std::env::remove_var(key) };
+    }
+
+    #[test]
+    fn audience_and_audiences_both_set_is_error() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe {
+            set_env("JWT_GUARD_AUTH_SCHEMES", "TEST");
+            set_env("JWT_GUARD_TEST_JWKS_URI", "http://localhost/jwks");
+            set_env("JWT_GUARD_TEST_AUDIENCE", "app1");
+            set_env("JWT_GUARD_TEST_AUDIENCES", "app2,app3");
+        }
+
+        let result = parse_env_schemes();
+        assert!(
+            result.is_err(),
+            "should reject when both AUDIENCE and AUDIENCES are set"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("AUDIENCE"),
+            "error should mention AUDIENCE: {err}"
+        );
+
+        unsafe {
+            remove_env("JWT_GUARD_AUTH_SCHEMES");
+            remove_env("JWT_GUARD_TEST_JWKS_URI");
+            remove_env("JWT_GUARD_TEST_AUDIENCE");
+            remove_env("JWT_GUARD_TEST_AUDIENCES");
+        }
+    }
+
+    #[test]
+    fn audience_alone_is_ok() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe {
+            set_env("JWT_GUARD_AUTH_SCHEMES", "TEST");
+            set_env("JWT_GUARD_TEST_JWKS_URI", "http://localhost/jwks");
+            set_env("JWT_GUARD_TEST_AUDIENCE", "app1");
+            remove_env("JWT_GUARD_TEST_AUDIENCES");
+        }
+
+        let result = parse_env_schemes();
+        assert!(result.is_ok());
+        let schemes = result.unwrap();
+        assert_eq!(schemes[0].1.audiences, vec!["app1"]);
+
+        unsafe {
+            remove_env("JWT_GUARD_AUTH_SCHEMES");
+            remove_env("JWT_GUARD_TEST_JWKS_URI");
+            remove_env("JWT_GUARD_TEST_AUDIENCE");
+        }
+    }
+
+    #[test]
+    fn audiences_alone_is_ok() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe {
+            set_env("JWT_GUARD_AUTH_SCHEMES", "TEST");
+            set_env("JWT_GUARD_TEST_JWKS_URI", "http://localhost/jwks");
+            remove_env("JWT_GUARD_TEST_AUDIENCE");
+            set_env("JWT_GUARD_TEST_AUDIENCES", "app2,app3");
+        }
+
+        let result = parse_env_schemes();
+        assert!(result.is_ok());
+        let schemes = result.unwrap();
+        assert_eq!(schemes[0].1.audiences, vec!["app2", "app3"]);
+
+        unsafe {
+            remove_env("JWT_GUARD_AUTH_SCHEMES");
+            remove_env("JWT_GUARD_TEST_JWKS_URI");
+            remove_env("JWT_GUARD_TEST_AUDIENCES");
+        }
+    }
 }
