@@ -23,9 +23,9 @@ pub struct AppState {
     pub target_url: String,
     pub schemes: Arc<Schemes>,
     pub jwks_cache: jwks::Cache,
-    pub forward_payload: bool,
+    pub forward_payload: Option<String>,
     pub forward_authorization: bool,
-    pub forward_scheme: bool,
+    pub forward_scheme: Option<String>,
     pub upstream_timeout: Duration,
     pub logging: LoggingFormat,
 }
@@ -133,11 +133,11 @@ async fn forward(
         builder = builder.header(key, value);
     }
 
-    if state.forward_payload {
-        builder = builder.header("X-JWT-Payload", payload);
+    if let Some(ref header) = state.forward_payload {
+        builder = builder.header(header.as_str(), payload);
     }
-    if state.forward_scheme {
-        builder = builder.header("X-JWT-Scheme", scheme_name);
+    if let Some(ref header) = state.forward_scheme {
+        builder = builder.header(header.as_str(), scheme_name);
     }
 
     let upstream_req = builder

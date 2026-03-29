@@ -67,11 +67,11 @@ For each scheme name in `JWT_GUARD_AUTH_SCHEMES`, the following variables are av
 
 ### Forwarding
 
-| Variable                          | Default | Description                                              |
-| --------------------------------- | ------- | -------------------------------------------------------- |
-| `JWT_GUARD_FORWARD_PAYLOAD`       | `true`  | Forward the raw JWT payload as `X-JWT-Payload` header    |
-| `JWT_GUARD_FORWARD_SCHEME`        | `false` | Forward the matched scheme name as `X-JWT-Scheme` header |
-| `JWT_GUARD_FORWARD_AUTHORIZATION` | `false` | Forward the original `Authorization` header upstream     |
+| Variable                          | Default | Description                                                                                                                      |
+| --------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `JWT_GUARD_FORWARD_PAYLOAD`       | `true`  | Forward the raw JWT payload upstream. `true`/`1` uses `X-JWT-Payload`; a value starting with `x-` sets a custom header name      |
+| `JWT_GUARD_FORWARD_SCHEME`        | `false` | Forward the matched scheme name upstream. `true`/`1` uses `X-JWT-Scheme`; a value starting with `x-` sets a custom header name   |
+| `JWT_GUARD_FORWARD_AUTHORIZATION` | `false` | Forward the original `Authorization` header upstream                                                                             |
 
 ### Server
 

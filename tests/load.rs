@@ -115,9 +115,9 @@ async fn setup_load_env() -> LoadTestEnv {
         target_url: target,
         schemes,
         jwks_cache: cache,
-        forward_payload: true,
+        forward_payload: Some("x-jwt-payload".to_string()),
         forward_authorization: false,
-        forward_scheme: false,
+        forward_scheme: None,
         upstream_timeout: std::time::Duration::from_secs(30),
         logging: jwt_guard::logging::LoggingFormat::None,
     });
