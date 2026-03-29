@@ -23,8 +23,7 @@ Client ──Bearer token──> jwt-guard ──validated──> Upstream
 # compose.yml
 services:
   jwt-guard:
-    image: jwt-guard
-    build: .
+    image: ghcr.io/mahdilamb/jwt-guard
     ports:
       - "3000:3000"
     environment:
@@ -134,15 +133,25 @@ Compares jwt-guard against Envoy proxy, both doing JWT validation in front of th
 ./bench/run.sh 5000 100     # custom
 ```
 
+### Results (10s, 50 concurrency, Apple Silicon)
+
+| Scenario            | jwt-guard | Envoy  |
+| ------------------- | --------- | ------ |
+| Valid token req/s   | 24,134    | 22,692 |
+| Valid token p99     | 5.0ms     | 9.7ms  |
+| Invalid token req/s | 42,661    | 42,347 |
+| Invalid token p99   | 2.1ms     | 3.0ms  |
+
+jwt-guard matches or exceeds Envoy across the board, with notably tighter tail latency on valid tokens.
+
 ## Docker
 
 The production image uses a [distroless](https://github.com/GoogleContainerTools/distroless) base (~20MB) and runs as a non-root user.
 
 ```sh
-docker build -t jwt-guard .
 docker run -e JWT_GUARD_TARGET_URL=http://backend:8080 \
            -e JWT_GUARD_AUTH_SCHEMES=MY_IDP \
            -e JWT_GUARD_MY_IDP_JWKS_URI=https://idp.example.com/.well-known/jwks.json \
            -p 3000:8000 \
-           jwt-guard
+           ghcr.io/mahdilamb/jwt-guard
 ```
