@@ -1,0 +1,58 @@
+services:
+  # Shared upstream echo service
+  upstream:
+    image: nginx:alpine
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+
+  # JWKS server serving the test key set
+  jwks:
+    image: python:3.12-slim
+    volumes:
+      - ./jwks:/srv
+    working_dir: /srv
+    command: ["python", "-m", "http.server", "8080", "--bind", "0.0.0.0"]
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/jwks.json')"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+
+  # jwt-guard proxy
+  jwt-guard:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    environment:
+      PORT: "3000"
+      JWT_GUARD_TARGET_URL: http://upstream
+      JWT_GUARD_AUTH_SCHEMES: BENCH
+      JWT_GUARD_BENCH_JWKS_URI: http://jwks:8080/jwks.json
+      JWT_GUARD_BENCH_ISSUER: https://bench.example.com
+    depends_on:
+      upstream:
+        condition: service_healthy
+      jwks:
+        condition: service_healthy
+
+  # Envoy proxy with JWT validation
+  envoy:
+    image: envoyproxy/envoy:distroless-v1.37-latest
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "3002:3000"
+    depends_on:
+      upstream:
+        condition: service_healthy
+      jwks:
+        condition: service_healthy
